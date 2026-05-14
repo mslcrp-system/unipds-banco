@@ -1,0 +1,14 @@
+# Supabase
+.branches
+.temp
+supabase/.temp
+
+# Environment / credenciais
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Supabase local dev
+supabase/.env
