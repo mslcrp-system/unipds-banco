@@ -1,0 +1,153 @@
+-- ============================================================
+-- Funcao insert_payment_attempts_from_raw
+--
+-- Popula payment_attempts com tentativas recusadas (TENTATIVA_RECUSADA)
+-- de alunos qualificados. Apenas alunos: CPF deve existir em students.
+--
+-- Regua: mesma de charges — se CPF nao eh aluno, a linha ja foi
+-- para raw_lines_skipped como LEAD_NAO_CONVERTIDO em 2d.
+-- Aqui so processamos CPFs que sao alunos.
+--
+-- valor_cobrado:
+--   TENTATIVA_RECUSADA -> Valor Oferta (nao houve pagamento efetivo)
+--
+-- contract_id: LEFT JOIN contracts via voomp_contrato_id
+--   NULL para vendas unicas (sem ID Contrato)
+--
+-- UPSERT via UNIQUE(voomp_venda_id) - preserva UUIDs
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION unipds.insert_payment_attempts_from_raw(p_modo text DEFAULT 'full')
+RETURNS TABLE(inseridos bigint, atualizados bigint)
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_inseridos   bigint := 0;
+    v_atualizados bigint := 0;
+BEGIN
+    WITH base AS (
+        SELECT
+            rl.payload,
+            f.tenant_id,
+            rl.processed_at,
+            unipds.classificar_raw_line(rl.payload) AS categoria_raw,
+            regexp_replace(rl.payload->>'CPF/CNPJ', '[^0-9]', '', 'g')                   AS cpf_cnpj,
+            trim(rl.payload->>'ID Produto')                                               AS voomp_produto_id,
+            regexp_replace(trim(COALESCE(rl.payload->>'ID Contrato', '')), '\.0+$', '')  AS voomp_contrato_id,
+            rl.payload->>'ID Venda'                                                       AS voomp_venda_id,
+            rl.payload->>'Tipo de cobrança'                                               AS tipo_cobranca,
+            rl.payload->>'Status da venda'                                                AS status_voomp,
+            CASE WHEN rl.payload->>'Recorrência atual' IN ('','Indeterminado') THEN NULL
+                 ELSE (rl.payload->>'Recorrência atual')::numeric::int END                AS numero_parcela,
+            NULLIF(rl.payload->>'Valor Oferta', '')::numeric                              AS valor_oferta_linha,
+            NULLIF(rl.payload->>'Taxa Voomp', '')::numeric                                AS taxa_voomp,
+            NULLIF(trim(rl.payload->>'Método de pagamento'), '')                          AS metodo_pagamento,
+            CASE WHEN rl.payload->>'Forma de pagamento' ~ '^[0-9]+$'
+                 THEN (rl.payload->>'Forma de pagamento')::int END                        AS forma_pagamento,
+            COALESCE(
+                NULLIF(rl.payload->>'Data de vencimento do boleto', '')::date,
+                NULLIF(rl.payload->>'Data da venda', '')::timestamp::date
+            )                                                                             AS data_tentativa,
+            NULLIF(trim(rl.payload->>'Motivo da recusa'), '')                             AS motivo_recusa
+        FROM unipds.raw_lines rl
+        JOIN unipds.raw_imports ri ON ri.import_id = rl.import_id
+        JOIN unipds.fontes f       ON f.fonte_id   = ri.fonte_id
+        WHERE unipds.classificar_raw_line(rl.payload) = 'TENTATIVA_RECUSADA'
+    ),
+    -- So tentativas de alunos qualificados
+    filtrado AS (
+        SELECT b.*
+        FROM base b
+        WHERE EXISTS (
+            SELECT 1 FROM unipds.students s
+            WHERE s.tenant_id = b.tenant_id AND s.cpf_cnpj = b.cpf_cnpj
+        )
+    ),
+    consolidado AS (
+        SELECT
+            voomp_venda_id,
+            (array_remove(array_agg(tenant_id          ORDER BY processed_at DESC), NULL))[1] AS tenant_id,
+            (array_remove(array_agg(cpf_cnpj           ORDER BY processed_at DESC), NULL))[1] AS cpf_cnpj,
+            (array_remove(array_agg(voomp_produto_id   ORDER BY processed_at DESC), NULL))[1] AS voomp_produto_id,
+            (array_remove(array_agg(NULLIF(voomp_contrato_id,'') ORDER BY processed_at DESC), NULL))[1] AS voomp_contrato_id,
+            (array_remove(array_agg(tipo_cobranca      ORDER BY processed_at DESC), NULL))[1] AS tipo_cobranca,
+            (array_remove(array_agg(categoria_raw      ORDER BY processed_at DESC), NULL))[1] AS categoria_raw,
+            (array_remove(array_agg(status_voomp       ORDER BY processed_at DESC), NULL))[1] AS status_voomp,
+            (array_remove(array_agg(numero_parcela     ORDER BY processed_at DESC), NULL))[1] AS numero_parcela,
+            (array_remove(array_agg(valor_oferta_linha ORDER BY processed_at DESC), NULL))[1] AS valor_oferta_linha,
+            (array_remove(array_agg(taxa_voomp         ORDER BY processed_at DESC), NULL))[1] AS taxa_voomp,
+            (array_remove(array_agg(metodo_pagamento   ORDER BY processed_at DESC), NULL))[1] AS metodo_pagamento,
+            (array_remove(array_agg(forma_pagamento    ORDER BY processed_at DESC), NULL))[1] AS forma_pagamento,
+            (array_remove(array_agg(data_tentativa     ORDER BY processed_at DESC), NULL))[1] AS data_tentativa,
+            (array_remove(array_agg(motivo_recusa      ORDER BY processed_at DESC), NULL))[1] AS motivo_recusa
+        FROM filtrado
+        GROUP BY voomp_venda_id
+    ),
+    enriquecido AS (
+        SELECT
+            c.voomp_venda_id,
+            c.tenant_id,
+            s.student_id,
+            p.product_id,
+            ct.contract_id,
+            c.tipo_cobranca,
+            -- TENTATIVA_RECUSADA: categoria sempre fixa
+            'TENTATIVA_RECUSADA' AS categoria,
+            c.status_voomp AS status,
+            c.numero_parcela,
+            -- Tentativa recusada nao tem valor pago; usa valor oferta
+            c.valor_oferta_linha AS valor_cobrado,
+            c.taxa_voomp,
+            c.metodo_pagamento,
+            c.forma_pagamento,
+            c.data_tentativa,
+            c.motivo_recusa
+        FROM consolidado c
+        JOIN unipds.students s ON s.tenant_id = c.tenant_id AND s.cpf_cnpj = c.cpf_cnpj
+        JOIN unipds.products p ON p.tenant_id = c.tenant_id AND p.voomp_produto_id = c.voomp_produto_id
+        LEFT JOIN unipds.contracts ct ON ct.tenant_id = c.tenant_id
+                                      AND ct.voomp_contrato_id = c.voomp_contrato_id
+        -- valor_cobrado pode ser NULL para tentativas sem valor oferta
+        -- aceitamos NULL aqui (diferente de charges onde eh NOT NULL)
+    ),
+    upserted AS (
+        INSERT INTO unipds.payment_attempts
+            (voomp_venda_id, tenant_id, student_id, product_id, contract_id,
+             tipo_cobranca, categoria, status,
+             numero_parcela, valor_cobrado,
+             taxa_voomp, metodo_pagamento, forma_pagamento,
+             data_tentativa, motivo_recusa)
+        SELECT voomp_venda_id, tenant_id, student_id, product_id, contract_id,
+               tipo_cobranca, categoria, status,
+               numero_parcela, valor_cobrado,
+               taxa_voomp, metodo_pagamento, forma_pagamento,
+               data_tentativa, motivo_recusa
+        FROM enriquecido
+        ON CONFLICT (voomp_venda_id) DO UPDATE
+        SET
+            tenant_id     = EXCLUDED.tenant_id,
+            student_id    = EXCLUDED.student_id,
+            product_id    = EXCLUDED.product_id,
+            contract_id   = EXCLUDED.contract_id,
+            tipo_cobranca = EXCLUDED.tipo_cobranca,
+            categoria     = EXCLUDED.categoria,
+            status        = EXCLUDED.status,
+            numero_parcela= EXCLUDED.numero_parcela,
+            valor_cobrado = EXCLUDED.valor_cobrado,
+            taxa_voomp    = EXCLUDED.taxa_voomp,
+            metodo_pagamento = EXCLUDED.metodo_pagamento,
+            forma_pagamento  = EXCLUDED.forma_pagamento,
+            data_tentativa   = EXCLUDED.data_tentativa,
+            motivo_recusa    = EXCLUDED.motivo_recusa
+        RETURNING (xmax = 0) AS inserted
+    )
+    SELECT count(*) FILTER (WHERE inserted), count(*) FILTER (WHERE NOT inserted)
+    INTO v_inseridos, v_atualizados
+    FROM upserted;
+
+    RETURN QUERY SELECT v_inseridos, v_atualizados;
+END;
+$function$;
+
+COMMENT ON FUNCTION unipds.insert_payment_attempts_from_raw(text) IS
+  'Popula payment_attempts (TENTATIVA_RECUSADA) de alunos. UPSERT via voomp_venda_id. valor_cobrado = valor_oferta_linha (sem pagamento efetivo). LEFT JOIN contracts (NULL para vendas unicas).';
