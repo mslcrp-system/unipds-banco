@@ -12,3 +12,6 @@ supabase/.temp
 
 # Supabase local dev
 supabase/.env
+
+# Scripts locais — credenciais
+scripts/.env
