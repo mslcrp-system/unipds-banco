@@ -1,11 +1,9 @@
 -- ============================================================
 -- Fix vw_cronograma_teorico: expor dias_atraso_charge no SELECT final
 --
--- O CTE com_charge calculava ch.dias_atraso AS dias_atraso_charge
--- mas a coluna nao estava no SELECT final da view — logo
--- vw_inadimplencia nao conseguia referencia-la.
+-- CREATE OR REPLACE VIEW so permite adicionar colunas no FINAL.
+-- dias_atraso_charge adicionada apos dias_atraso_teorico.
 --
--- Fix: adicionar cr.dias_atraso_charge ao SELECT final.
 -- vw_inadimplencia eh recriada logo abaixo pois depende desta view.
 -- ============================================================
 
@@ -98,20 +96,20 @@ SELECT
     cr.valor_cobrado_real,
     cr.data_vencimento_real,
     cr.data_pagamento_real,
-    cr.dias_atraso_charge,   -- exposto agora para vw_inadimplencia
     CASE
         WHEN cr.tipo_refund IN ('Reembolso','Chargeback') THEN 0
         WHEN cr.categoria_charge = 'PAGO' THEN 0
         WHEN cr.data_prevista < CURRENT_DATE THEN (CURRENT_DATE - cr.data_prevista)
         ELSE 0
-    END AS dias_atraso_teorico
+    END AS dias_atraso_teorico,
+    cr.dias_atraso_charge   -- adicionada no FINAL (CREATE OR REPLACE nao permite no meio)
 FROM com_refund cr;
 
 COMMENT ON VIEW unipds.vw_cronograma_teorico IS
   'Visao UNIPDS: cronograma teorico por contrato com status real cruzado com charges/refunds. Identifica parcelas NAO_EMITIDAS (fragilidade Voomp).';
 
 -- ============================================================
--- Recriar vw_inadimplencia (depende de vw_cronograma_teorico)
+-- Recriar vw_inadimplencia com dias_atraso_charge agora disponivel
 -- ============================================================
 
 CREATE OR REPLACE VIEW unipds.vw_inadimplencia AS

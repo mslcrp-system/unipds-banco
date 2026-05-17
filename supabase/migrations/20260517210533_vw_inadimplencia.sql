@@ -1,20 +1,15 @@
 -- ============================================================
--- View vw_inadimplencia
+-- View vw_inadimplencia (v1 - substituida pelo fix 20260517211946)
 --
--- Consolida inadimplencia por parcela com AMBAS as visoes:
---   - Visao Voomp: charges ABERTO com dias_atraso > 1
---   - Visao Unipds: cronograma teorico com dias_atraso_teorico > 1
---
--- Cobertura: somente parcelas de ASSINATURA.
--- Vendas unicas Aguardando ficam de fora (regua de ouro).
---
--- Buckets de aging: EM_DIA (=0), 1_30D, 31_60D, 61_90D, 90PLUS
--- aplicados ao dias_atraso_teorico (visao Unipds, fonte unica).
+-- Esta versao usava vt.dias_atraso_charge que nao estava exposta
+-- em vw_cronograma_teorico. Corrigida via workaround abaixo.
+-- O fix migration 20260517211946 entrega o estado final correto:
+--   - vw_cronograma_teorico atualizada para expor dias_atraso_charge
+--   - vw_inadimplencia recriada com a coluna correta
 -- ============================================================
 
 CREATE OR REPLACE VIEW unipds.vw_inadimplencia AS
 WITH parcelas_devidas AS (
-    -- Pega parcelas teoricas vencidas e nao pagas (todas as visoes)
     SELECT
         vt.contract_id,
         vt.tenant_id,
@@ -28,11 +23,10 @@ WITH parcelas_devidas AS (
         vt.charge_id,
         vt.voomp_venda_id,
         vt.data_vencimento_real,
-        vt.dias_atraso_charge AS dias_atraso_voomp,
         vt.dias_atraso_teorico
     FROM unipds.vw_cronograma_teorico vt
     WHERE vt.status_parcela IN ('EM_ABERTO', 'NAO_EMITIDA')
-      AND vt.dias_atraso_teorico > 1   -- regua: atraso > 1 dia
+      AND vt.dias_atraso_teorico > 1
 )
 SELECT
     pd.contract_id,
@@ -49,9 +43,8 @@ SELECT
     pd.data_vencimento_real,
     pd.valor_parcela_previsto,
     pd.status_parcela,
-    pd.dias_atraso_voomp,
+    NULL::integer       AS dias_atraso_voomp,   -- fix migration adiciona coluna real
     pd.dias_atraso_teorico,
-    -- Bucket de aging (Visao Unipds)
     CASE
         WHEN pd.dias_atraso_teorico BETWEEN 2  AND 30  THEN '1_30D'
         WHEN pd.dias_atraso_teorico BETWEEN 31 AND 60  THEN '31_60D'
@@ -59,7 +52,6 @@ SELECT
         WHEN pd.dias_atraso_teorico > 90               THEN '90PLUS'
         ELSE 'EM_DIA'
     END AS bucket_aging,
-    -- Flag: cobranca emitida pela Voomp ou nao
     CASE
         WHEN pd.status_parcela = 'EM_ABERTO'   THEN 'VOOMP_EMITIU'
         WHEN pd.status_parcela = 'NAO_EMITIDA' THEN 'VOOMP_NAO_EMITIU'
