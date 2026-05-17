@@ -23,7 +23,6 @@ DISCORD_WEBHOOK_URL (opcional).
 
 import argparse
 import hashlib
-import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -212,7 +211,7 @@ def ingerir(supabase: Client, xlsx_path: Path, fonte_arg: str) -> str | None:
             "nome_arquivo": filename,
             "sha256_hash":  sha,
             "total_linhas": total,
-            "status":       "processing",
+            "status":       "processando",
         })
         .execute()
     )
@@ -233,24 +232,27 @@ def ingerir(supabase: Client, xlsx_path: Path, fonte_arg: str) -> str | None:
     inserted = 0
     for i in range(0, total, BATCH_SIZE):
         chunk = rows[i:i + BATCH_SIZE]
-        payload = [{"import_id": import_id, "payload": r} for r in chunk]
+        # linha_numero: 1-based, relativo ao arquivo inteiro
+        payload = [
+            {"import_id": import_id, "linha_numero": i + j + 1, "payload": r}
+            for j, r in enumerate(chunk)
+        ]
         try:
             supabase.schema("unipds").table("raw_lines").insert(payload).execute()
             inserted += len(chunk)
             log(f"  Inseridas {inserted}/{total}...")
         except Exception as e:
-            erro = str(e)
+            erro = str(e)[:500]
             log(f"  ERRO batch {i}: {erro}")
             supabase.schema("unipds").table("raw_imports").update({
-                "status": "error",
-                "erros":  erro[:500],
+                "status": "erro",
             }).eq("import_id", import_id).execute()
             discord_error(filename, "raw_lines", erro)
             sys.exit(3)
 
     # 6. Marca como done
     supabase.schema("unipds").table("raw_imports").update({
-        "status":      "done",
+        "status":      "concluido",
         "processadas": inserted,
     }).eq("import_id", import_id).execute()
 
@@ -260,12 +262,23 @@ def ingerir(supabase: Client, xlsx_path: Path, fonte_arg: str) -> str | None:
 
 
 def processar(supabase: Client) -> None:
-    """Chama unipds.processar_raw_lines('full') e imprime stats."""
-    log("Rodando processar_raw_lines('full')...")
-    result = supabase.schema("unipds").rpc("processar_raw_lines", {"p_modo": "full"}).execute()
-    log("Resultado:")
-    for row in result.data or []:
-        log(f"  {row['etapa']:20s} | inseridos: {row['inseridos']:6d} | atualizados: {row['atualizados']:6d} | skipped: {row['skipped']:5d}")
+    """Chama cada sub-funcao ETL em sequencia (evita statement_timeout do PostgREST)."""
+    etapas = [
+        ("products",         "upsert_products_from_raw"),
+        ("students",         "upsert_students_from_raw"),
+        ("contracts",        "upsert_contracts_from_raw"),
+        ("charges",          "insert_charges_from_raw"),
+        ("payment_attempts", "insert_payment_attempts_from_raw"),
+        ("refunds",          "insert_refunds_from_raw"),
+    ]
+    log("Rodando ETL por etapa...")
+    for etapa, fn in etapas:
+        result = supabase.schema("unipds").rpc(fn, {"p_modo": "full"}).execute()
+        row = result.data[0] if result.data else {}
+        ins  = row.get("inseridos", 0)
+        atu  = row.get("atualizados", 0)
+        skip = row.get("skipped", row.get("skipped_cpf", 0) + row.get("skipped_lead", 0))
+        log(f"  {etapa:20s} | inseridos: {ins:6d} | atualizados: {atu:6d} | skipped: {skip:5d}")
 
 
 def main():
