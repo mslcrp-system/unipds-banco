@@ -30,7 +30,10 @@
 -- data_ultimo_pagamento_pos_contato (quando houver pagamento auto).
 -- ============================================================
 
-CREATE OR REPLACE VIEW cobranca.vw_reversoes AS
+-- Estrutura de colunas mudou (ordem/nomes) — DROP + CREATE
+DROP VIEW IF EXISTS cobranca.vw_reversoes;
+
+CREATE VIEW cobranca.vw_reversoes AS
 WITH interacoes_agg AS (
     SELECT
         ci.caso_id,
