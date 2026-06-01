@@ -257,8 +257,30 @@ def ingerir(supabase: Client, xlsx_path: Path, fonte_arg: str) -> str | None:
     }).eq("import_id", import_id).execute()
 
     log(f"  raw_lines inseridas: {inserted}")
+
+    # 7. Limpeza de retencao: mantem so a ultima importacao por fonte.
+    # Cada arquivo Voomp eh snapshot historico completo, entao as
+    # importacoes anteriores sao redundantes e so incham raw_lines.
+    # Falha aqui NAO aborta a ingestao (dados ja estao salvos).
+    limpar_imports_antigos(supabase)
+
     discord_success(filename, fonte["nome"], inserted, import_id)
     return import_id
+
+
+def limpar_imports_antigos(supabase: Client) -> None:
+    """Chama unipds.limpar_imports_antigos() para evitar acumulo de raw_lines.
+    Em regime incremental remove apenas a importacao anterior da fonte
+    (~10k linhas) — rapido. Erros sao logados mas nao abortam a ingestao."""
+    try:
+        res = supabase.schema("unipds").rpc("limpar_imports_antigos").execute()
+        row = res.data[0] if res.data else {}
+        rl   = row.get("raw_lines_removidas", 0)
+        sk   = row.get("skipped_removidos", 0)
+        imp  = row.get("imports_removidos", 0)
+        log(f"  Limpeza: -{rl} raw_lines, -{sk} skipped, -{imp} imports antigos")
+    except Exception as e:
+        log(f"  WARN: limpeza de imports antigos falhou (nao critico): {str(e)[:200]}")
 
 
 def processar(supabase: Client) -> None:
