@@ -273,7 +273,7 @@ def limpar_imports_antigos(supabase: Client) -> None:
     Em regime incremental remove apenas a importacao anterior da fonte
     (~10k linhas) — rapido. Erros sao logados mas nao abortam a ingestao."""
     try:
-        res = supabase.schema("unipds").rpc("limpar_imports_antigos").execute()
+        res = supabase.schema("unipds").rpc("limpar_imports_antigos", {}).execute()
         row = res.data[0] if res.data else {}
         rl   = row.get("raw_lines_removidas", 0)
         sk   = row.get("skipped_removidos", 0)
