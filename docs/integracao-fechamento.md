@@ -76,30 +76,49 @@ Authorization: Bearer <key>
 
 | View | Grão | Uso |
 |---|---|---|
-| `vw_lucratividade_mensal` | tenant × mês | **demonstrativo** — receita → líquido → impostos → lucro |
-| `vw_faturamento_mensal` | tenant × mês | faturamento (bruto / reembolso / churn / líquido) |
+| `vw_lucratividade_mensal` | tenant × mês × **classe** | **demonstrativo** — receita → líquido → impostos → lucro |
+| `vw_faturamento_mensal` | tenant × mês × **classe** | faturamento (bruto / reembolso / churn / líquido) |
 | `vw_faturamento_eventos` | 1 linha por evento | drill-down (booking/reversão por contrato/venda) |
 | `parametros_fiscais` | — | alíquotas vigentes (exibir/simular no front) |
 
+### Dimensão `classe` / `curso`
+
+As views de faturamento são quebradas por **`classe`**:
+
+| classe | O que é | Imposto de serviço? |
+|---|---|---|
+| `POS_GRADUACAO` | Pós-graduação (curso) | **Sim** |
+| `EXTENSAO` | Extensão (curso) | **Sim** |
+| `ADMINISTRATIVO` | Multas, cancelamento, negociação | **Não** (receita financeira) |
+
+- **Faturamento de cursos** = `POS_GRADUACAO + EXTENSAO`. Some os dois pra ter o total de curso.
+- **`ADMINISTRATIVO` não é faturamento de curso** — é movimento financeiro (multa = receita). Vem **sem ISS/PIS/COFINS/IRPJ/CSLL** (natureza fiscal de receita financeira ainda a definir). Não é excluído; aparece como classe própria.
+- **`curso`** (em `vw_faturamento_eventos`) é o **nome canônico** (4 cursos reais), sem variantes "A VISTA"/"Empresa"/"Recorrente".
+
 ### `vw_lucratividade_mensal` — colunas
+
+Grão: **tenant × mês × classe**.
 
 | Coluna | Tipo | Nota |
 |---|---|---|
 | `tenant_id` | uuid | |
 | `tenant_nome` | text | |
 | `ano_mes` | text | `'YYYY-MM'` (competência por data de pagamento) |
+| `classe` | text | `POS_GRADUACAO` / `EXTENSAO` / `ADMINISTRATIVO` |
 | `faturamento_bruto` | numeric | faturamento reconhecido, **já líquido das reversões** do mês |
 | `taxa_voomp` | numeric | |
 | `taxa_secretaria` | numeric | = comissão co-produtor |
 | `valor_liquido` | numeric | `faturamento_bruto − taxa_voomp − taxa_secretaria` |
-| `iss` `pis` `cofins` `irpj` `csll` | numeric | imposto = `valor_liquido × alíquota` |
+| `iss` `pis` `cofins` `irpj` `csll` | numeric | imposto = `valor_liquido × alíquota` (0 para `ADMINISTRATIVO`) |
 | `total_impostos` | numeric | |
 | `lucratividade` | numeric | `valor_liquido − total_impostos` |
 
+> Pra o total do tenant/mês (todas as classes), **some as linhas** ou filtre a classe desejada.
+
 ### `vw_faturamento_eventos` — colunas
 
-`tenant_id, contract_id, voomp_venda_id, evento, competencia (date), ano_mes,
-valor, taxa_voomp, taxa_secretaria`
+`tenant_id, contract_id, voomp_venda_id, product_id, curso, classe, evento,
+competencia (date), ano_mes, valor, taxa_voomp, taxa_secretaria`
 
 `evento ∈ { BOOKING_ASSINATURA, BOOKING_AVISTA, REVERSAO_REEMBOLSO_AVISTA, REVERSAO_CHURN_ASSINATURA }`.
 Em reversões, `valor`/`taxa_*` vêm **negativos**.
@@ -111,11 +130,14 @@ Em reversões, `valor`/`taxa_*` vêm **negativos**.
 **Demonstrativo de um mês (os dois tenants):**
 
 ```ts
+// retorna 1 linha por classe (POS_GRADUACAO / EXTENSAO / ADMINISTRATIVO)
 const { data, error } = await supabase.schema('fechamento')
   .from('vw_lucratividade_mensal')
-  .select('tenant_nome, faturamento_bruto, valor_liquido, total_impostos, lucratividade')
+  .select('tenant_nome, classe, faturamento_bruto, valor_liquido, total_impostos, lucratividade')
   .eq('ano_mes', '2026-05')
   .order('tenant_nome')
+
+// faturamento de curso = somar POS_GRADUACAO + EXTENSAO; ADMINISTRATIVO é financeiro à parte
 ```
 
 **Série histórica de um tenant:**
