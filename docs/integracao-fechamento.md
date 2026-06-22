@@ -76,24 +76,27 @@ Authorization: Bearer <key>
 
 | View | Grão | Uso |
 |---|---|---|
-| `vw_lucratividade_mensal` | tenant × mês × **classe** | **demonstrativo** — receita → líquido → impostos → lucro |
-| `vw_faturamento_mensal` | tenant × mês × **classe** | faturamento (bruto / reembolso / churn / líquido) |
+| `vw_lucratividade_mensal` | tenant × mês × **classe** × **categoria** | **demonstrativo** — receita → líquido → impostos → lucro |
+| `vw_faturamento_mensal` | tenant × mês × **classe** × **categoria** | faturamento (bruto / reembolso / churn / líquido) |
 | `vw_faturamento_eventos` | 1 linha por evento | drill-down (booking/reversão por contrato/venda) |
 | `parametros_fiscais` | — | alíquotas vigentes (exibir/simular no front) |
 
-### Dimensão `classe` / `curso`
+### Dimensões `classe` / `categoria` / `curso`
 
-As views de faturamento são quebradas por **`classe`**:
+As views são quebradas por **`classe`** (grupo fiscal) e **`categoria`** (linha do demonstrativo):
 
-| classe | O que é | Imposto de serviço? |
-|---|---|---|
-| `POS_GRADUACAO` | Pós-graduação (curso) | **Sim** |
-| `EXTENSAO` | Extensão (curso) | **Sim** |
-| `ADMINISTRATIVO` | Multas, cancelamento, negociação | **Não** (receita financeira) |
+| classe | categoria | O que é | Imposto de serviço? |
+|---|---|---|---|
+| `POS_GRADUACAO` | `Pós-Graduação` | Pós (curso) | **Sim** |
+| `EXTENSAO` | `Extensão` | Extensão (curso) | **Sim** |
+| `ADMINISTRATIVO` | `Multa` | Multa de rescisão/atraso | **Não** (receita financeira) |
+| `ADMINISTRATIVO` | `Cancelamento` | Cancelamento | **Não** |
+| `ADMINISTRATIVO` | `Negociação` | Acordo/negociação | **Não** |
 
-- **Faturamento de cursos** = `POS_GRADUACAO + EXTENSAO`. Some os dois pra ter o total de curso.
-- **`ADMINISTRATIVO` não é faturamento de curso** — é movimento financeiro (multa = receita). Vem **sem ISS/PIS/COFINS/IRPJ/CSLL** (natureza fiscal de receita financeira ainda a definir). Não é excluído; aparece como classe própria.
-- **`curso`** (em `vw_faturamento_eventos`) é o **nome canônico** (4 cursos reais), sem variantes "A VISTA"/"Empresa"/"Recorrente".
+- **`categoria`** é a dimensão pra **abrir as linhas** do demonstrativo (Multa / Cancelamento / Negociação separados).
+- **`classe`** é o grupo fiscal: `POS_GRADUACAO + EXTENSAO` = faturamento de curso (tributado); `ADMINISTRATIVO` = financeiro (sem imposto de serviço, régua fiscal a definir). Não é excluído.
+- `categoria → classe` é determinístico (1:1). Hoje só `Multa` tem recebimento; `Cancelamento`/`Negociação` aparecem como linha quando tiverem cobrança paga.
+- **`curso`** (em `vw_faturamento_eventos`) é o **nome canônico** (4 cursos reais, sem "A VISTA"/"Empresa"/"Recorrente"); no administrativo distingue Multa Pós × Multa Extensão.
 
 ### `vw_lucratividade_mensal` — colunas
 
@@ -104,7 +107,8 @@ Grão: **tenant × mês × classe**.
 | `tenant_id` | uuid | |
 | `tenant_nome` | text | |
 | `ano_mes` | text | `'YYYY-MM'` (competência por data de pagamento) |
-| `classe` | text | `POS_GRADUACAO` / `EXTENSAO` / `ADMINISTRATIVO` |
+| `classe` | text | `POS_GRADUACAO` / `EXTENSAO` / `ADMINISTRATIVO` (grupo fiscal) |
+| `categoria` | text | `Pós-Graduação` / `Extensão` / `Multa` / `Cancelamento` / `Negociação` (linha do demonstrativo) |
 | `faturamento_bruto` | numeric | faturamento reconhecido, **já líquido das reversões** do mês |
 | `taxa_voomp` | numeric | |
 | `taxa_secretaria` | numeric | = comissão co-produtor |
@@ -117,8 +121,8 @@ Grão: **tenant × mês × classe**.
 
 ### `vw_faturamento_eventos` — colunas
 
-`tenant_id, contract_id, voomp_venda_id, product_id, curso, classe, evento,
-competencia (date), ano_mes, valor, taxa_voomp, taxa_secretaria`
+`tenant_id, contract_id, voomp_venda_id, product_id, curso, classe, categoria,
+evento, competencia (date), ano_mes, valor, taxa_voomp, taxa_secretaria`
 
 `evento ∈ { BOOKING_ASSINATURA, BOOKING_AVISTA, REVERSAO_REEMBOLSO_AVISTA, REVERSAO_CHURN_ASSINATURA }`.
 Em reversões, `valor`/`taxa_*` vêm **negativos**.
