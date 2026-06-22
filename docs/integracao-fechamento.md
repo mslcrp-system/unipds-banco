@@ -213,7 +213,8 @@ const { data } = await supabase.schema('fechamento')
 ```ts
 const { data } = await supabase.schema('fechamento')
   .rpc('get_recebiveis_asof', { p_data: '2026-05-31' })   // omita p_data = hoje
-// retorna por tenant: carteira_total, realizado, vencido, a_vencer, total_a_receber, pct_vencido
+// retorna por tenant: carteira_total, realizado, reembolso_cb, vencido, a_vencer,
+//   total_a_receber, pct_vencido, qtd_contratos, qtd_parcelas, qtd_vencido, qtd_a_vencer
 ```
 
 **Alíquotas vigentes (pra exibir / alimentar um simulador):**
