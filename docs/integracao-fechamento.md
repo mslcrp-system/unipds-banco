@@ -80,7 +80,11 @@ Authorization: Bearer <key>
 | `vw_faturamento_mensal` | tenant × mês × **classe** × **categoria** | faturamento (bruto / reembolso / churn / líquido) |
 | `vw_faturamento_eventos` | 1 linha por evento | drill-down (booking/reversão por contrato/venda) |
 | `vw_recebimentos_mensal` | tenant × mês × tipo × categoria | **caixa** — recebido do mês (Nova × Recorrente) |
+| `get_recebiveis_asof(p_data)` | RPC → tenant | **recebível a receber** numa data (vencido + a vencer) |
+| `vw_recebiveis_parcela` | 1 linha por parcela | base/drill do recebível (faturamento_total) |
 | `parametros_fiscais` | — | alíquotas vigentes (exibir/simular no front) |
+
+> **Recebível** (`get_recebiveis_asof`): `total_a_receber = vencido + a_vencer`, em `faturamento_total`, **as-of qualquer data**. O total é robusto (independe da definição de inadimplência — a parcela está na soma de qualquer forma). `vencido` segue a régua oficial da CR (EM_ABERTO emitida). Antes de comparar com um book, **passe a mesma data** (`get_recebiveis_asof('2026-05-31')`).
 
 > **Faturamento gerencial** (bookings/TCV, reconhece o contrato cheio na entrada) ≠ **Recebimentos** (`vw_recebimentos_mensal`, só o que foi efetivamente recebido no mês). Ambos na régua `faturamento_total` — o total recebido bate com o realizado.
 
@@ -202,6 +206,14 @@ const { data } = await supabase.schema('fechamento')
   .eq('ano_mes', '2026-06')      // mês recebido
   .order('mes_emissao')
 // pivote ano_mes (recebido) × mes_emissao (safra) pro mapa de cohort
+```
+
+**Recebível a receber numa data (vencido + a vencer):**
+
+```ts
+const { data } = await supabase.schema('fechamento')
+  .rpc('get_recebiveis_asof', { p_data: '2026-05-31' })   // omita p_data = hoje
+// retorna por tenant: carteira_total, realizado, vencido, a_vencer, total_a_receber, pct_vencido
 ```
 
 **Alíquotas vigentes (pra exibir / alimentar um simulador):**
