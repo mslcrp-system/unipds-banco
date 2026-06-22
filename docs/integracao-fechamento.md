@@ -137,6 +137,7 @@ Grão: **tenant × mês × tipo_recebimento × classe × categoria**. Competênc
 | Coluna | Nota |
 |---|---|
 | `tenant_id` `tenant_nome` `ano_mes` | |
+| `mes_emissao` | **safra** — `'YYYY-MM'` da entrada (assinatura: `data_primeira_venda`; à vista: o próprio mês). Cruze `ano_mes` × `mes_emissao` pro cohort |
 | `tipo_recebimento` | **`Nova`** (à vista + entrada P1) · **`Recorrente`** (parcelas 2…N) |
 | `classe` `categoria` | mesma dimensão das outras views |
 | `qtd` | nº de recebimentos |
@@ -190,6 +191,17 @@ const { data } = await supabase.schema('fechamento')
   .select('tenant_nome, tipo_recebimento, categoria, recebido, valor_liquido')
   .eq('ano_mes', '2026-05')
 // agrupe por tipo_recebimento (Nova/Recorrente); por classe/categoria pra abrir Pós/Extensão
+```
+
+**Cohort — quanto do recebido do mês vem de cada safra:**
+
+```ts
+const { data } = await supabase.schema('fechamento')
+  .from('vw_recebimentos_mensal')
+  .select('mes_emissao, tipo_recebimento, recebido')
+  .eq('ano_mes', '2026-06')      // mês recebido
+  .order('mes_emissao')
+// pivote ano_mes (recebido) × mes_emissao (safra) pro mapa de cohort
 ```
 
 **Alíquotas vigentes (pra exibir / alimentar um simulador):**
