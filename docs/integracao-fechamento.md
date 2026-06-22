@@ -82,7 +82,11 @@ Authorization: Bearer <key>
 | `vw_recebimentos_mensal` | tenant × mês × tipo × categoria | **caixa** — recebido do mês (Nova × Recorrente) |
 | `get_recebiveis_asof(p_data)` | RPC → tenant | **recebível a receber** numa data (vencido + a vencer) |
 | `vw_recebiveis_parcela` | 1 linha por parcela | base/drill do recebível (faturamento_total) |
+| `vw_performance_comercial_mensal` | tenant × mês | **comercial** — captados, evadidos, base, churn |
+| `vw_comercial_aluno` | 1 linha por aluno | base/drill (data_captacao, data_evasao, motivo) |
 | `parametros_fiscais` | — | alíquotas vigentes (exibir/simular no front) |
+
+> **Performance comercial** (régua automática do banco): **captado** = 1ª compra paga; **evadido** = refund/CB ∪ contrato cancelado ∪ inadimplência ≥90 dias (linha de churn ajustável); **base** = captados − evadidos (líquida, as-of mês); **churn** = evadidos ÷ base início. É *payment-churn* — não inclui abandono acadêmico (não está no Voomp).
 
 > **Recebível** (`get_recebiveis_asof`): `total_a_receber = vencido + a_vencer`, em `faturamento_total`, **as-of qualquer data**. O total é robusto (independe da definição de inadimplência — a parcela está na soma de qualquer forma). `vencido` segue a régua oficial da CR (EM_ABERTO emitida). Antes de comparar com um book, **passe a mesma data** (`get_recebiveis_asof('2026-05-31')`).
 
